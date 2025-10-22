@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // BOOKINGS COLLECTION
+    match /bookings/{bookingId} {
+
+      // Allow public read, but restrict writes with validation
+      allow read: if true;
+
+      allow create: if request.resource.data.keys().hasAll([
+          'name',
+          'email',
+          'date',
+          'guests',
+          'timestamp'
+        ]) &&
+        request.resource.data.name is string &&
+        request.resource.data.email is string &&
+        request.resource.data.date is timestamp &&
+        request.resource.data.guests is int &&
+        request.resource.data.guests > 0 &&
+        request.resource.data.guests <= 20 && // Example limit for guest count
+        // Rate limit per user (based on email hash or IP identifier)
+        request.time - getLastBookingTime(request.resource.data.email) > duration.value(1, "h") &&
+        // Ensure no more than 2 bookings for that day
+        getBookingsForDate(request.resource.data.date).size() < 2;
+
+      // Deny edits/deletes from public
+      allow update, delete: if false;
+    }
+
+    // OPTIONAL: CONTACT FORM ENTRIES
+    match /contacts/{contactId} {
+      allow read: if false; // private
+      allow create: if request.resource.data.keys().hasAll([
+          'name',
+          'email',
+          'message',
+          'timestamp'
+        ]) &&
+        request.resource.data.name is string &&
+        request.resource.data.email is string &&
+        request.resource.data.message is string &&
+        request.resource.data.message.size() <= 1000;
+    }
+
+    // ADMIN COLLECTIONS (secured manually later)
+    match /admin/{docId} {
+      allow read, write: if request.auth != null && request.auth.token.admin == true;
+    }
+  }
+}
+
+// === Helper Functions ===
+function getBookingsForDate(date) {
+  return firestore.get(/databases/$(database)/documents/bookings)
+    .where('date', '==', date)
+    .list();
+}
+
+function getLastBookingTime(email) {
+  let results = firestore.get(/databases/$(database)/documents/bookings)
+    .where('email', '==', email)
+    .orderBy('timestamp', 'desc')
+    .limit(1)
+    .list();
+
+  return results.size() > 0 ? results[0].data.timestamp : timestamp.date(1970, 1, 1);
+}
